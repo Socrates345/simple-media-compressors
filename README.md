@@ -1,24 +1,28 @@
 # Simple Media Compressors
 
-Three standalone Python scripts for batch-compressing images, PDFs, and videos from the
-command line. Point a script at a folder, get smaller files out.
+Four standalone Python scripts for batch-compressing images, PDFs, and videos, plus
+converting EPUBs to PDF, from the command line. Point a script at a folder, get smaller
+(or converted) files out.
 
-| Tool | Script | Compresses |
+| Tool | Script | Does |
 |---|---|---|
-| Images | `img-compr/img-compr.py` | JPEG, PNG, WebP |
-| PDFs | `pdf_compr/pdf-compr.py` | PDF |
-| Video | `video_compr/video-compr.py` | MP4, MOV, MKV, AVI, WebM |
+| Images | `img-compr/img-compr.py` | Compresses JPEG, PNG, WebP |
+| PDFs | `pdf_compr/pdf-compr.py` | Compresses PDF |
+| Video | `video_compr/video-compr.py` | Compresses MP4, MOV, MKV, AVI, WebM |
+| EPUB → PDF | `epub_pdf/epub-to-pdf.py` | Converts EPUB to PDF |
 
 ## Setup
 
 1. Install Python 3.10+
-2. `pip install -r requirements.txt` — installs Pillow, needed by the image compressor.
+2. `pip install -r requirements.txt` — installs Pillow (image compressor) and
+   ebooklib/beautifulsoup4/xhtml2pdf (EPUB→PDF converter).
 3. Install the external tool(s) for whichever compressor(s) you're using:
    - **PDFs** — [Ghostscript](https://www.ghostscript.com/releases/gsdnld.html), must be on
      PATH (Windows: `choco install ghostscript`). [qpdf](https://qpdf.sourceforge.io/) is
      optional but recommended (`winget install QPDF.QPDF`) — adds a lossless extra pass.
    - **Video** — [ffmpeg](https://ffmpeg.org/download.html) (includes ffprobe), must be on PATH.
    - **Images** — nothing else needed, Pillow covers it.
+   - **EPUB → PDF** — nothing else needed, pure Python (no Calibre or other binary required).
 
 Each script is independent — you only need the external tool for the one you run.
 
@@ -77,6 +81,28 @@ python video_compr/video-compr.py clips/ compressed/ --codec h265         # smal
   `h264_nvenc`/`h265_nvenc` (NVIDIA GPU encode, requires an nvenc-capable ffmpeg build).
 - Recurses subdirectories, mirrors folder structure to output.
 - If `output_dir` is omitted, files are saved alongside originals with a `_compressed` suffix.
+
+## EPUB → PDF
+
+```
+python epub_pdf/epub-to-pdf.py epubs/mybook.epub   # single file, PDF saved alongside it
+python epub_pdf/epub-to-pdf.py epubs/ pdfs/         # batch a folder, recurses
+```
+
+- Chapters are read from the epub's spine (its reading order) and concatenated, each
+  starting on a new PDF page, with a generated title page (title + author from the
+  epub's metadata).
+- Embedded images are extracted from the epub archive and re-linked so they render in
+  the output PDF.
+- The epub's original CSS is dropped and replaced with a plain, readable stylesheet —
+  xhtml2pdf only supports a subset of CSS (no flexbox/floats/etc.), so carrying over
+  arbitrary book stylesheets tends to break more than it helps. Expect solid text +
+  image fidelity, not a pixel-perfect reproduction of fancy/illustrated layouts.
+- Recurses subdirectories, mirrors folder structure to output.
+- If `output_dir` is omitted, the PDF is saved alongside the source `.epub`.
+- Pure Python — no Calibre or other external binary required. If you hit an epub that
+  renders badly (heavy custom CSS, SVG-based layouts, fixed-layout comics/manga),
+  Calibre's `ebook-convert` is the more capable fallback: https://calibre-ebook.com/
 
 ## License
 

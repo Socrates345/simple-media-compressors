@@ -1,7 +1,9 @@
 __pycache__/
 *.pyc
+.venv/
 
-# Compressed output produced by the tools
+# Output produced by the tools
 img-compr/compressed/
 pdf_compr/compressed/
 video_compr/compressed/
+epub_pdf/pdfs/

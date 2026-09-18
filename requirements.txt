@@ -1,1 +1,4 @@
 pillow
+ebooklib
+beautifulsoup4
+xhtml2pdf
