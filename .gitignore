@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+
+# Compressed output produced by the tools
+img-compr/compressed/
+pdf_compr/compressed/
+video_compr/compressed/
