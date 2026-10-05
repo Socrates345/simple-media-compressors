@@ -56,6 +56,20 @@ HEIGHT_LADDER = sorted(MIN_BITRATE_KBPS, reverse=True)
 
 AUDIO_LADDER = ["128k", "96k", "64k", "48k"]
 
+# NVENC hardware encoders refuse frames below ~145px on either axis. Software
+# encoders have no such floor, but a starved portrait clip can otherwise pick
+# a short side well under that (see pick_short_side), so clamp for NVENC only.
+NVENC_MIN_SHORT_SIDE = 160
+
+# Containers that can only hold a specific set of codecs. If the source's own
+# extension is reused for the output but the chosen codec can't mux into it
+# (e.g. h264 into .webm), ffmpeg fails outright — fall back to a container
+# that actually supports the chosen codec.
+CONTAINER_CODEC_WHITELIST = {
+    ".webm": {"vp9"},
+}
+FALLBACK_CONTAINER = ".mp4"
+
 
 def parse_bitrate(s: str) -> int:
     s = s.strip().lower()
@@ -66,29 +80,41 @@ def parse_bitrate(s: str) -> int:
     return int(s)
 
 
-def probe(src: Path) -> tuple[float, int]:
+def probe(src: Path) -> tuple[float, int, int]:
     dur = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(src)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
-    height = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height",
-         "-of", "csv=p=0", str(src)],
-        capture_output=True, text=True,
+    dims = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+         "-of", "csv=p=0:s=x", str(src)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if dur.returncode != 0 or not dur.stdout.strip():
         sys.exit(f"Could not read duration of {src.name}:\n{dur.stderr[-500:]}")
-    if height.returncode != 0 or not height.stdout.strip():
-        sys.exit(f"Could not read resolution of {src.name}:\n{height.stderr[-500:]}")
-    return float(dur.stdout.strip()), int(height.stdout.strip())
+    if dims.returncode != 0 or "x" not in dims.stdout.strip():
+        sys.exit(f"Could not read resolution of {src.name}:\n{dims.stderr[-500:]}")
+    width_str, height_str = dims.stdout.strip().split("x")
+    return float(dur.stdout.strip()), int(width_str), int(height_str)
 
 
-def pick_height(video_bps: float, original_height: int) -> int:
-    candidates = [h for h in HEIGHT_LADDER if h <= original_height] or [original_height]
+def pick_short_side(video_bps: float, original_short_side: int) -> int:
+    candidates = [h for h in HEIGHT_LADDER if h <= original_short_side] or [original_short_side]
     for h in candidates:
         if video_bps >= MIN_BITRATE_KBPS.get(h, 0) * 1_000:
             return h
     return candidates[-1]
+
+
+def scale_filter(short_side: int, orig_w: int, orig_h: int) -> str:
+    # Ladder/bitrate budgeting is keyed to the short side of the frame (what
+    # actually governs perceived quality). Scale whichever axis that is —
+    # height for landscape, width for portrait — and let -2 derive the other
+    # axis so it stays even. Applying "height" unconditionally, as before,
+    # let portrait clips collapse to a tiny width the encoder could reject.
+    if orig_w >= orig_h:
+        return f"scale=-2:'min({short_side},ih)'"
+    return f"scale='min({short_side},iw)':-2"
 
 
 def pick_audio_bitrate(total_target_bps: float) -> str:
@@ -99,30 +125,33 @@ def pick_audio_bitrate(total_target_bps: float) -> str:
 
 
 def run_ffmpeg(cmd: list[str], src: Path) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         sys.exit(f"ffmpeg failed on {src.name}:\n{result.stderr[-2000:]}")
 
 
 def compress_to_size(src: Path, dst: Path, target_mb: float, max_height: int | None,
                       codec: str, audio_bitrate: str | None, preset: str) -> tuple[int, int]:
-    duration, original_height = probe(src)
+    duration, original_width, original_height = probe(src)
     target_bytes = target_mb * 1024 * 1024 * SAFETY_MARGIN
     total_target_bps = (target_bytes * 8) / duration
 
     chosen_audio = audio_bitrate or pick_audio_bitrate(total_target_bps)
     video_bps = max(total_target_bps - parse_bitrate(chosen_audio), 80_000)
-    height = max_height if max_height else pick_height(video_bps, original_height)
+    original_short_side = min(original_width, original_height)
+    short_side = max_height if max_height else pick_short_side(video_bps, original_short_side)
+    if codec in NVENC_CODECS:
+        short_side = max(short_side, NVENC_MIN_SHORT_SIDE)
 
     vcodec = CODECS[codec]
     acodec = "libopus" if codec == "vp9" else "aac"
     kbps = f"{int(video_bps // 1000)}k"
-    print(f"  {src.name}: budget {kbps} video / {chosen_audio} audio @ {height}p "
+    print(f"  {src.name}: budget {kbps} video / {chosen_audio} audio @ {short_side}p short side "
           f"for {duration:.0f}s")
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     base = ["ffmpeg", "-y", "-i", str(src), "-c:v", vcodec, "-b:v", kbps,
-            "-vf", f"scale=-2:'min({height},ih)'"]
+            "-vf", scale_filter(short_side, original_width, original_height)]
 
     if codec in NVENC_CODECS:
         # NVENC has its own internal two-pass (-multipass fullres); no external pass/log files.
@@ -152,6 +181,8 @@ def compress_crf(src: Path, dst: Path, crf: int, preset: str, max_height: int,
     acodec = "libopus" if codec == "vp9" else "aac"
 
     if codec in NVENC_CODECS:
+        if max_height:
+            max_height = max(max_height, NVENC_MIN_SHORT_SIDE)
         # NVENC has no -crf; -cq in VBR mode is the closest equivalent (same 0-51 scale).
         cmd = ["ffmpeg", "-y", "-i", str(src), "-c:v", vcodec, "-preset", NVENC_PRESET_MAP[preset],
                "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
@@ -208,17 +239,40 @@ def main() -> None:
     if not args.input_dir.is_dir():
         sys.exit(f"Not a directory: {args.input_dir}")
 
-    files = [p for p in args.input_dir.rglob("*") if p.suffix.lower() in SUPPORTED]
+    files = sorted(p for p in args.input_dir.rglob("*") if p.suffix.lower() in SUPPORTED)
     if not files:
         sys.exit("No supported videos found.")
+
+    def pick_ext(src: Path) -> str:
+        if args.ext:
+            return args.ext
+        if args.codec == "vp9":
+            return ".webm"
+        if src.suffix.lower() in CONTAINER_CODEC_WHITELIST and \
+                args.codec not in CONTAINER_CODEC_WHITELIST[src.suffix.lower()]:
+            # Source container can't hold the chosen codec (e.g. h264 into .webm) —
+            # ffmpeg would refuse to mux, so fall back to a container that works.
+            return FALLBACK_CONTAINER
+        return src.suffix.lower()
+
+    exts = [pick_ext(src) for src in files]
+    dsts = [build_dst(src, args.input_dir, args.output_dir, ext) for src, ext in zip(files, exts)]
+    # Forcing everything onto one container extension (vp9, or the webm
+    # fallback above) can make same-stem, different-extension sources collide
+    # on one output path and silently overwrite each other. Disambiguate only
+    # the colliding ones so normal runs keep their plain output names.
+    dup_counts = {}
+    for dst in dsts:
+        dup_counts[dst] = dup_counts.get(dst, 0) + 1
+    for i, dst in enumerate(dsts):
+        if dup_counts[dst] > 1:
+            src = files[i]
+            dsts[i] = dst.with_stem(f"{dst.stem}_{src.suffix.lstrip('.').lower()}")
 
     target_bytes = args.target_size * 1024 * 1024
     total_before = total_after = 0
     under_target = 0
-    for src in sorted(files):
-        ext = args.ext or (".webm" if args.codec == "vp9" else src.suffix.lower())
-        dst = build_dst(src, args.input_dir, args.output_dir, ext)
-
+    for src, dst in zip(files, dsts):
         if args.crf is not None:
             before, after = compress_crf(src, dst, args.crf, args.preset, args.max_height or 0,
                                           args.codec, args.audio_bitrate or "128k")

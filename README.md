@@ -29,9 +29,9 @@ Each script is independent — you only need the external tool for the one you r
 ## Images
 
 ```
-python img-compr/img-compr.py photos/ compressed/
-python img-compr/img-compr.py photos/ compressed/ --quality 70 --max-size 1280
-python img-compr/img-compr.py photos/ compressed/ --no-webp   # keep PNG as PNG
+python img-compr/img-compr.py img-compr/photos/ img-compr/compressed/
+python img-compr/img-compr.py img-compr/photos/ img-compr/compressed/ --quality 70 --max-size 1280
+python img-compr/img-compr.py img-compr/photos/ img-compr/compressed/ --no-webp   # keep PNG as PNG
 ```
 
 - JPEG/WebP are re-encoded at `--quality` (default 80).
@@ -64,11 +64,11 @@ python pdf_compr/pdf-compr.py pdfs/ compressed/ --grayscale      # scans/photos 
 ## Video
 
 ```
-python video_compr/video-compr.py clips/ compressed/                       # target 5MB per file (default)
-python video_compr/video-compr.py clips/ compressed/ --target-size 8       # different size cap
-python video_compr/video-compr.py clips/ compressed/ --crf 28              # fixed-quality, no size guarantee
-python video_compr/video-compr.py clips/ compressed/ --codec h264_nvenc    # NVIDIA GPU encode, much faster
-python video_compr/video-compr.py clips/ compressed/ --codec h265         # smaller, less compatible
+python video_compr/video-compr.py video_compr/clips/ video_compr/compressed/                          # target 5MB per file (default)
+python video_compr/video-compr.py video_compr/clips/ video_compr/compressed/ --crf 28                 # fixed-quality, no size guarantee. The higher the value, the more compressed
+python video_compr/video-compr.py video_compr/clips/ video_compr/compressed/ --codec h264_nvenc       # NVIDIA GPU encode, much faster
+python video_compr/video-compr.py video_compr/clips/ video_compr/compressed/ --target-size 8          # different size cap
+python video_compr/video-compr.py video_compr/clips/ video_compr/compressed/ --codec h265             # smaller, less compatible
 ```
 
 - Default mode two-pass encodes to land at/just-under `--target-size` MB (default 5).
@@ -86,7 +86,7 @@ python video_compr/video-compr.py clips/ compressed/ --codec h265         # smal
 
 ```
 python epub_pdf/epub-to-pdf.py epubs/mybook.epub   # single file, PDF saved alongside it
-python epub_pdf/epub-to-pdf.py epubs/ pdfs/         # batch a folder, recurses
+python epub_pdf/epub-to-pdf.py epub_pdf/epubs/ epub_pdf/pdfs/         # batch a folder, recurses
 ```
 
 - Chapters are read from the epub's spine (its reading order) and concatenated, each
